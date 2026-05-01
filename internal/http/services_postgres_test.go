@@ -161,14 +161,14 @@ func TestPostgresServices_Integration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.Author.ID != user2 || c.Author.Nickname == "" {
+		if c.Author.ID != user2 || c.Author.Nickname == "" || c.Author.DisplayName == "" {
 			t.Fatalf("expected author object in create response, got %+v", c.Author)
 		}
 		items, _, err := svc.Comments.ListByAnomaly(ctx, created.ID, "", 10)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(items) == 0 || items[0].Author.ID == uuid.Nil || items[0].Author.Nickname == "" {
+		if len(items) == 0 || items[0].Author.ID == uuid.Nil || items[0].Author.Nickname == "" || items[0].Author.DisplayName == "" {
 			t.Fatalf("expected author object in list response, got %+v", items)
 		}
 		a, _ := svc.Anomalies.GetByID(ctx, created.ID)
@@ -179,12 +179,22 @@ func TestPostgresServices_Integration(t *testing.T) {
 
 	t.Run("email-like nickname is sanitized for comments", func(t *testing.T) {
 		emailNickUser := seedUser(t, ctx, pool, "mailnick@example.com", "mailnick@example.com")
+		avatarURL := "https://example.com/a.png"
+		if _, err := pool.Exec(ctx, `UPDATE users SET avatar_url=$1 WHERE id=$2`, avatarURL, emailNickUser); err != nil {
+			t.Fatal(err)
+		}
 		c, err := svc.Comments.Create(ctx, created.ID, emailNickUser, "safe")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.Author.Nickname != "UX Anomalies user" {
-			t.Fatalf("expected sanitized nickname, got %q", c.Author.Nickname)
+		if c.Author.DisplayName != "mailnick" || c.Author.Nickname != "mailnick" {
+			t.Fatalf("expected sanitized nickname/display name, got %+v", c.Author)
+		}
+		if strings.Contains(c.Author.Nickname, "@") || strings.Contains(c.Author.DisplayName, "@") {
+			t.Fatalf("expected email not to be exposed, got %+v", c.Author)
+		}
+		if c.Author.Avatar != avatarURL {
+			t.Fatalf("expected avatar to be preserved, got %q", c.Author.Avatar)
 		}
 		items, _, err := svc.Comments.ListByAnomaly(ctx, created.ID, "", 20)
 		if err != nil {
@@ -194,8 +204,14 @@ func TestPostgresServices_Integration(t *testing.T) {
 		for _, it := range items {
 			if it.AuthorID == emailNickUser {
 				found = true
-				if it.Author.Nickname != "UX Anomalies user" {
-					t.Fatalf("expected sanitized nickname in list, got %q", it.Author.Nickname)
+				if it.Author.DisplayName != "mailnick" || it.Author.Nickname != "mailnick" {
+					t.Fatalf("expected sanitized nickname/display name in list, got %+v", it.Author)
+				}
+				if strings.Contains(it.Author.Nickname, "@") || strings.Contains(it.Author.DisplayName, "@") {
+					t.Fatalf("expected email not to be exposed in list, got %+v", it.Author)
+				}
+				if it.Author.Avatar != avatarURL {
+					t.Fatalf("expected avatar to be preserved in list, got %q", it.Author.Avatar)
 				}
 			}
 		}

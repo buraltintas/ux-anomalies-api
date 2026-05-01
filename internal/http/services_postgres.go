@@ -263,6 +263,8 @@ func (p *pgAnomalies) GetFeed(ctx context.Context, filter anomalies.FeedFilter, 
 		if err := rows.Scan(&it.ID, &it.Category, &it.Description, &it.LikeCount, &it.CommentCount, &it.CreatedAt, &it.Author.ID, &it.Author.Nickname, &it.Author.Avatar, &it.Slug, &it.Title, &it.ImageCount, &bkt, &obj); err != nil {
 			return nil, "", err
 		}
+		it.Author.DisplayName = safeAuthorDisplayName(it.Author.Nickname)
+		it.Author.Nickname = it.Author.DisplayName
 		if bkt != "" && obj != "" {
 			it.ThumbnailURL = "gcs://" + bkt + "/" + obj
 		}
@@ -314,6 +316,8 @@ func (p *pgAnomalies) ListByAuthorNickname(ctx context.Context, nickname, cursor
 		if err := rows.Scan(&it.ID, &it.Category, &it.Description, &it.LikeCount, &it.CommentCount, &it.CreatedAt, &it.Author.ID, &it.Author.Nickname, &it.Author.Avatar, &it.Slug, &it.Title, &it.ImageCount, &bkt, &obj); err != nil {
 			return nil, "", err
 		}
+		it.Author.DisplayName = safeAuthorDisplayName(it.Author.Nickname)
+		it.Author.Nickname = it.Author.DisplayName
 		if bkt != "" && obj != "" {
 			it.ThumbnailURL = "gcs://" + bkt + "/" + obj
 		}
@@ -504,7 +508,8 @@ func (p *pgComments) ListByAnomaly(ctx context.Context, anomalyID uuid.UUID, cur
 			return nil, "", err
 		}
 		c.Author.ID = c.AuthorID
-		c.Author.Nickname = safeCommenterNickname(nickname)
+		c.Author.DisplayName = safeAuthorDisplayName(nickname)
+		c.Author.Nickname = c.Author.DisplayName
 		c.Author.Avatar = avatar
 		out = append(out, c)
 	}
@@ -536,7 +541,8 @@ func (p *pgComments) Create(ctx context.Context, anomalyID, authorID uuid.UUID, 
 		return comments.Comment{}, err
 	}
 	c.Author.ID = c.AuthorID
-	c.Author.Nickname = safeCommenterNickname(nickname)
+	c.Author.DisplayName = safeAuthorDisplayName(nickname)
+	c.Author.Nickname = c.Author.DisplayName
 	c.Author.Avatar = avatar
 	if _, err := tx.Exec(ctx, `UPDATE anomalies SET comment_count=comment_count+1 WHERE id=$1`, anomalyID); err != nil {
 		return comments.Comment{}, err

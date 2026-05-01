@@ -318,7 +318,7 @@ func TestRouterE2E_V1Flows(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("comment create failed: %d %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"author"`) {
+	if !strings.Contains(rec.Body.String(), `"author"`) || !strings.Contains(rec.Body.String(), `"display_name"`) {
 		t.Fatalf("comment create response should include author object: %s", rec.Body.String())
 	}
 	var commentsCount int
@@ -333,7 +333,7 @@ func TestRouterE2E_V1Flows(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "hello") {
 		t.Fatalf("comments list failed: %d %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"author"`) {
+	if !strings.Contains(rec.Body.String(), `"author"`) || !strings.Contains(rec.Body.String(), `"display_name"`) {
 		t.Fatalf("comments list should include author object: %s", rec.Body.String())
 	}
 

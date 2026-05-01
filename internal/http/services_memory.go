@@ -138,7 +138,8 @@ func (m *memoryAnomalies) GetFeed(_ context.Context, filter anomalies.FeedFilter
 				continue
 			}
 			item.Author.ID = u.ID
-			item.Author.Nickname = u.Nickname
+			item.Author.DisplayName = safeAuthorDisplayName(u.Nickname)
+			item.Author.Nickname = item.Author.DisplayName
 			item.Author.Avatar = u.AvatarURL
 		}
 		items = append(items, item)
@@ -174,7 +175,8 @@ func (m *memoryAnomalies) ListByAuthorNickname(_ context.Context, nickname, _ st
 		}
 		if u, ok := m.state.usersByID[a.AuthorID]; ok {
 			item.Author.ID = u.ID
-			item.Author.Nickname = u.Nickname
+			item.Author.DisplayName = safeAuthorDisplayName(u.Nickname)
+			item.Author.Nickname = item.Author.DisplayName
 			item.Author.Avatar = u.AvatarURL
 		}
 		items = append(items, item)
@@ -370,11 +372,13 @@ func (m *memoryComments) ListByAnomaly(_ context.Context, anomalyID uuid.UUID, _
 	for i := range out {
 		if u, ok := m.state.usersByID[out[i].AuthorID]; ok {
 			out[i].Author.ID = u.ID
-			out[i].Author.Nickname = safeCommenterNickname(u.Nickname)
+			out[i].Author.DisplayName = safeAuthorDisplayName(u.Nickname)
+			out[i].Author.Nickname = out[i].Author.DisplayName
 			out[i].Author.Avatar = u.AvatarURL
 		} else {
 			out[i].Author.ID = out[i].AuthorID
-			out[i].Author.Nickname = "UX Anomalies user"
+			out[i].Author.DisplayName = authorFallbackName
+			out[i].Author.Nickname = authorFallbackName
 		}
 	}
 	if limit <= 0 || limit > 100 {
@@ -399,22 +403,16 @@ func (m *memoryComments) Create(_ context.Context, anomalyID, authorID uuid.UUID
 	c := comments.Comment{ID: uuid.New(), AnomalyID: anomalyID, AuthorID: authorID, Text: strings.TrimSpace(text), CreatedAt: time.Now()}
 	if u, ok := m.state.usersByID[authorID]; ok {
 		c.Author.ID = u.ID
-		c.Author.Nickname = safeCommenterNickname(u.Nickname)
+		c.Author.DisplayName = safeAuthorDisplayName(u.Nickname)
+		c.Author.Nickname = c.Author.DisplayName
 		c.Author.Avatar = u.AvatarURL
 	} else {
 		c.Author.ID = authorID
-		c.Author.Nickname = "UX Anomalies user"
+		c.Author.DisplayName = authorFallbackName
+		c.Author.Nickname = authorFallbackName
 	}
 	m.state.comments[anomalyID] = append(m.state.comments[anomalyID], c)
 	a.CommentCount++
 	m.state.anomalies[anomalyID] = a
 	return c, nil
-}
-
-func safeCommenterNickname(n string) string {
-	n = strings.TrimSpace(n)
-	if n == "" || strings.Contains(n, "@") {
-		return "UX Anomalies user"
-	}
-	return n
 }

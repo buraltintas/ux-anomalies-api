@@ -57,9 +57,10 @@ type FeedItem struct {
 	ViewerHasLiked bool      `json:"viewer_has_liked"`
 	CreatedAt      time.Time `json:"created_at"`
 	Author         struct {
-		ID       uuid.UUID `json:"id"`
-		Nickname string    `json:"nickname"`
-		Avatar   string    `json:"avatar_url,omitempty"`
+		ID          uuid.UUID `json:"id"`
+		DisplayName string    `json:"display_name"`
+		Nickname    string    `json:"nickname"`
+		Avatar      string    `json:"avatar_url,omitempty"`
 	} `json:"author"`
 }
 
