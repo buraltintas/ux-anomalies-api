@@ -245,7 +245,7 @@ func (p *pgAnomalies) GetFeed(ctx context.Context, filter anomalies.FeedFilter, 
 		) imgc ON TRUE
 		WHERE (a.created_at, a.id) < ($1,$2)
 		  AND a.is_public = TRUE AND a.is_published = TRUE AND a.is_approved = TRUE
-		  AND ($3 = '' OR a.description ILIKE '%' || $3 || '%')
+		  AND ($3 = '' OR a.description ILIKE '%' || $3 || '%' OR a.title ILIKE '%' || $3 || '%')
 		  AND ($4 = '' OR a.category = $4)
 		  AND ($5 = '' OR u.nickname_normalized = $5)
 		ORDER BY a.created_at DESC, a.id DESC

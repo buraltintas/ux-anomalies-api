@@ -104,6 +104,35 @@ func TestPostgresServices_Integration(t *testing.T) {
 		}
 	})
 
+	t.Run("feed q search matches title case-insensitively", func(t *testing.T) {
+		_, err := svc.Anomalies.Create(ctx, user1, anomalies.CreateInput{
+			Title:       "Instagram date calculation anomaly",
+			Category:    anomalies.CategoryWeb,
+			Description: "something else",
+			Images:      []anomalies.Image{{Bucket: "b", ObjectName: uuid.NewString(), MimeType: "image/png", ByteSize: 1, Position: 1}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		items, _, err := svc.Anomalies.GetFeed(ctx, anomalies.FeedFilter{Q: "instagram"}, "", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(items) == 0 {
+			t.Fatal("expected title search to return results for q=instagram")
+		}
+		found := false
+		for _, it := range items {
+			if strings.Contains(strings.ToLower(it.Title), "instagram") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected at least one result with title containing instagram, got %+v", items)
+		}
+	})
+
 	t.Run("like/unlike idempotency with counters", func(t *testing.T) {
 		if err := svc.Anomalies.Like(ctx, user2, created.ID); err != nil {
 			t.Fatal(err)
