@@ -1,0 +1,17 @@
+services:
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+  api:
+    build: .
+    environment:
+      APP_ADDR: "${APP_ADDR:-:8080}"
+      BFF_SECRET: "${BFF_SECRET}"
+      JWT_SIGNING_KEY: "${JWT_SIGNING_KEY}"
+      DATABASE_URL: "${DATABASE_URL}"
+      MIGRATIONS_DATABASE_URL: "${MIGRATIONS_DATABASE_URL}"
+      JWT_ISSUER: "${JWT_ISSUER:-uxanomalies-api}"
+      JWT_AUDIENCE: "${JWT_AUDIENCE:-uxanomalies-bff}"
+    ports:
+      - "8080:8080"
