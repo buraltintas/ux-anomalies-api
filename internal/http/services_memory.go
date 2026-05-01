@@ -129,7 +129,7 @@ func (m *memoryAnomalies) GetFeed(_ context.Context, filter anomalies.FeedFilter
 		if filter.Q != "" && !strings.Contains(strings.ToLower(a.Description), strings.ToLower(filter.Q)) {
 			continue
 		}
-		item := anomalies.FeedItem{ID: a.ID, Slug: a.Slug, Title: a.Title, Category: a.Category, Description: a.Description, LikeCount: a.LikeCount, CommentCount: a.CommentCount, CreatedAt: a.CreatedAt}
+		item := anomalies.FeedItem{ID: a.ID, Slug: a.Slug, Title: a.Title, Category: a.Category, Description: a.Description, ImageCount: len(a.Images), LikeCount: a.LikeCount, CommentCount: a.CommentCount, CreatedAt: a.CreatedAt}
 		if len(a.Images) > 0 {
 			item.ThumbnailURL = a.Images[0].URL
 		}
@@ -166,7 +166,7 @@ func (m *memoryAnomalies) ListByAuthorNickname(_ context.Context, nickname, _ st
 		if a.AuthorID != uid {
 			continue
 		}
-		item := anomalies.FeedItem{ID: a.ID, Category: a.Category, Description: a.Description, LikeCount: a.LikeCount, CommentCount: a.CommentCount, CreatedAt: a.CreatedAt}
+		item := anomalies.FeedItem{ID: a.ID, Category: a.Category, Description: a.Description, ImageCount: len(a.Images), LikeCount: a.LikeCount, CommentCount: a.CommentCount, CreatedAt: a.CreatedAt}
 		item.Slug = a.Slug
 		item.Title = a.Title
 		if len(a.Images) > 0 {

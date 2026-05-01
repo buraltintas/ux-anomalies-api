@@ -233,12 +233,16 @@ func (p *pgAnomalies) GetFeed(ctx context.Context, filter anomalies.FeedFilter, 
 	rows, err := p.pool.Query(ctx, `
 		SELECT a.id,a.category,a.description,a.like_count,a.comment_count,a.created_at,u.id,u.nickname,COALESCE(u.avatar_url,''),
 		       a.slug,a.title,
+		       COALESCE(imgc.cnt,0) AS image_count,
 		       COALESCE(img.bucket,''),COALESCE(img.object_name,'')
 		FROM anomalies a
 		JOIN users u ON u.id=a.author_id
 		LEFT JOIN LATERAL (
 			SELECT bucket,object_name FROM anomaly_images ai WHERE ai.anomaly_id=a.id ORDER BY position ASC LIMIT 1
 		) img ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT COUNT(*)::int AS cnt FROM anomaly_images ai2 WHERE ai2.anomaly_id=a.id
+		) imgc ON TRUE
 		WHERE (a.created_at, a.id) < ($1,$2)
 		  AND a.is_public = TRUE AND a.is_published = TRUE AND a.is_approved = TRUE
 		  AND ($3 = '' OR a.description ILIKE '%' || $3 || '%')
@@ -256,7 +260,7 @@ func (p *pgAnomalies) GetFeed(ctx context.Context, filter anomalies.FeedFilter, 
 	for rows.Next() {
 		var it anomalies.FeedItem
 		var bkt, obj string
-		if err := rows.Scan(&it.ID, &it.Category, &it.Description, &it.LikeCount, &it.CommentCount, &it.CreatedAt, &it.Author.ID, &it.Author.Nickname, &it.Author.Avatar, &it.Slug, &it.Title, &bkt, &obj); err != nil {
+		if err := rows.Scan(&it.ID, &it.Category, &it.Description, &it.LikeCount, &it.CommentCount, &it.CreatedAt, &it.Author.ID, &it.Author.Nickname, &it.Author.Avatar, &it.Slug, &it.Title, &it.ImageCount, &bkt, &obj); err != nil {
 			return nil, "", err
 		}
 		if bkt != "" && obj != "" {
@@ -283,12 +287,16 @@ func (p *pgAnomalies) ListByAuthorNickname(ctx context.Context, nickname, cursor
 	rows, err := p.pool.Query(ctx, `
 		SELECT a.id,a.category,a.description,a.like_count,a.comment_count,a.created_at,u.id,u.nickname,COALESCE(u.avatar_url,''),
 		       a.slug,a.title,
+		       COALESCE(imgc.cnt,0) AS image_count,
 		       COALESCE(img.bucket,''),COALESCE(img.object_name,'')
 		FROM anomalies a
 		JOIN users u ON u.id=a.author_id
 		LEFT JOIN LATERAL (
 			SELECT bucket,object_name FROM anomaly_images ai WHERE ai.anomaly_id=a.id ORDER BY position ASC LIMIT 1
 		) img ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT COUNT(*)::int AS cnt FROM anomaly_images ai2 WHERE ai2.anomaly_id=a.id
+		) imgc ON TRUE
 		WHERE u.nickname_normalized=$1 AND (a.created_at, a.id) < ($2,$3)
 		  AND a.is_public = TRUE AND a.is_published = TRUE AND a.is_approved = TRUE
 		ORDER BY a.created_at DESC, a.id DESC
@@ -303,7 +311,7 @@ func (p *pgAnomalies) ListByAuthorNickname(ctx context.Context, nickname, cursor
 	for rows.Next() {
 		var it anomalies.FeedItem
 		var bkt, obj string
-		if err := rows.Scan(&it.ID, &it.Category, &it.Description, &it.LikeCount, &it.CommentCount, &it.CreatedAt, &it.Author.ID, &it.Author.Nickname, &it.Author.Avatar, &it.Slug, &it.Title, &bkt, &obj); err != nil {
+		if err := rows.Scan(&it.ID, &it.Category, &it.Description, &it.LikeCount, &it.CommentCount, &it.CreatedAt, &it.Author.ID, &it.Author.Nickname, &it.Author.Avatar, &it.Slug, &it.Title, &it.ImageCount, &bkt, &obj); err != nil {
 			return nil, "", err
 		}
 		if bkt != "" && obj != "" {

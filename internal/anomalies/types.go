@@ -50,6 +50,7 @@ type FeedItem struct {
 	Category     Category  `json:"category"`
 	Description  string    `json:"description"`
 	ThumbnailURL string    `json:"thumbnail_url"`
+	ImageCount   int       `json:"image_count"`
 	LikeCount    int       `json:"like_count"`
 	CommentCount int       `json:"comment_count"`
 	CreatedAt    time.Time `json:"created_at"`
