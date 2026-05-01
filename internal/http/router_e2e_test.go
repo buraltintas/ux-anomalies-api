@@ -226,6 +226,9 @@ func TestRouterE2E_V1Flows(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), anomalyID) {
 		t.Fatalf("feed search/filter failed: %d %s", rec.Code, rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), `"viewer_has_liked":false`) {
+		t.Fatalf("unauthenticated feed should include viewer_has_liked false: %s", rec.Body.String())
+	}
 
 	// user search
 	req = httptest.NewRequest(http.MethodGet, "/v1/users/search?q=own", nil)
@@ -243,6 +246,9 @@ func TestRouterE2E_V1Flows(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("like failed: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"viewer_has_liked":true`) {
+		t.Fatalf("like response should include viewer_has_liked true: %s", rec.Body.String())
 	}
 	req = httptest.NewRequest(http.MethodPost, "/v1/anomalies/"+anomalyID+"/like", nil)
 	setAuthHeaders(req, ownerToken)
@@ -265,6 +271,43 @@ func TestRouterE2E_V1Flows(t *testing.T) {
 	if likes != 0 {
 		t.Fatalf("like_count expected 0 got %d", likes)
 	}
+	if !strings.Contains(rec.Body.String(), `"viewer_has_liked":false`) {
+		t.Fatalf("unlike response should include viewer_has_liked false: %s", rec.Body.String())
+	}
+
+	// detail viewer state (authenticated and unauthenticated)
+	req = httptest.NewRequest(http.MethodGet, "/v1/anomalies/"+anomalyID, nil)
+	req.Header.Set("X-BFF-SECRET", "bff-secret")
+	req.Header.Set("Authorization", "Bearer "+ownerToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"viewer_has_liked":false`) {
+		t.Fatalf("detail viewer_has_liked expected false after unlike: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// feed/detail viewer state true when liked
+	req = httptest.NewRequest(http.MethodPost, "/v1/anomalies/"+anomalyID+"/like", nil)
+	setAuthHeaders(req, ownerToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/feed?limit=10", nil)
+	req.Header.Set("X-BFF-SECRET", "bff-secret")
+	req.Header.Set("Authorization", "Bearer "+ownerToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"viewer_has_liked":true`) {
+		t.Fatalf("feed viewer_has_liked true expected for liked anomaly: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/anomalies/"+anomalyID, nil)
+	req.Header.Set("X-BFF-SECRET", "bff-secret")
+	req.Header.Set("Authorization", "Bearer "+ownerToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"viewer_has_liked":true`) {
+		t.Fatalf("detail viewer_has_liked true expected for liked anomaly: %d %s", rec.Code, rec.Body.String())
+	}
 
 	// 7) comments create/list and counter
 	req = httptest.NewRequest(http.MethodPost, "/v1/anomalies/"+anomalyID+"/comments", strings.NewReader(`{"text":"hello"}`))
@@ -274,6 +317,9 @@ func TestRouterE2E_V1Flows(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("comment create failed: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"author"`) {
+		t.Fatalf("comment create response should include author object: %s", rec.Body.String())
 	}
 	var commentsCount int
 	_ = pool.QueryRow(ctx, "SELECT comment_count FROM anomalies WHERE id=$1", anomalyID).Scan(&commentsCount)
@@ -286,6 +332,9 @@ func TestRouterE2E_V1Flows(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "hello") {
 		t.Fatalf("comments list failed: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"author"`) {
+		t.Fatalf("comments list should include author object: %s", rec.Body.String())
 	}
 
 	// 8) patch ownership: owner succeeds, non-owner fails safely

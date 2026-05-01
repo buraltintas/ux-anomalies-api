@@ -439,6 +439,41 @@ func (p *pgAnomalies) Unlike(ctx context.Context, userID, anomalyID uuid.UUID) e
 	return tx.Commit(ctx)
 }
 
+func (p *pgAnomalies) ViewerHasLiked(ctx context.Context, userID, anomalyID uuid.UUID) (bool, error) {
+	var exists bool
+	err := p.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM anomaly_likes WHERE anomaly_id=$1 AND user_id=$2)`, anomalyID, userID).Scan(&exists)
+	return exists, err
+}
+
+func (p *pgAnomalies) ViewerHasLikedMap(ctx context.Context, userID uuid.UUID, anomalyIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	out := map[uuid.UUID]bool{}
+	if len(anomalyIDs) == 0 {
+		return out, nil
+	}
+	rows, err := p.pool.Query(ctx, `
+		SELECT anomaly_id
+		FROM anomaly_likes
+		WHERE user_id=$1 AND anomaly_id = ANY($2::uuid[])
+	`, userID, anomalyIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var aid uuid.UUID
+		if err := rows.Scan(&aid); err != nil {
+			return nil, err
+		}
+		out[aid] = true
+	}
+	for _, id := range anomalyIDs {
+		if _, ok := out[id]; !ok {
+			out[id] = false
+		}
+	}
+	return out, rows.Err()
+}
+
 func (p *pgComments) ListByAnomaly(ctx context.Context, anomalyID uuid.UUID, cursor string, limit int) ([]comments.Comment, string, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
@@ -448,10 +483,12 @@ func (p *pgComments) ListByAnomaly(ctx context.Context, anomalyID uuid.UUID, cur
 		return nil, "", err
 	}
 	rows, err := p.pool.Query(ctx, `
-		SELECT id,anomaly_id,author_id,text,created_at
-		FROM anomaly_comments
-		WHERE anomaly_id=$1 AND (created_at,id) < ($2,$3)
-		ORDER BY created_at DESC,id DESC
+		SELECT c.id,c.anomaly_id,c.author_id,c.text,c.created_at,
+		       COALESCE(u.nickname,''),COALESCE(u.avatar_url,'')
+		FROM anomaly_comments c
+		JOIN users u ON u.id = c.author_id
+		WHERE c.anomaly_id=$1 AND (c.created_at,c.id) < ($2,$3)
+		ORDER BY c.created_at DESC,c.id DESC
 		LIMIT $4
 	`, anomalyID, ts, id, limit+1)
 	if err != nil {
@@ -462,9 +499,13 @@ func (p *pgComments) ListByAnomaly(ctx context.Context, anomalyID uuid.UUID, cur
 	var next string
 	for rows.Next() {
 		var c comments.Comment
-		if err := rows.Scan(&c.ID, &c.AnomalyID, &c.AuthorID, &c.Text, &c.CreatedAt); err != nil {
+		var nickname, avatar string
+		if err := rows.Scan(&c.ID, &c.AnomalyID, &c.AuthorID, &c.Text, &c.CreatedAt, &nickname, &avatar); err != nil {
 			return nil, "", err
 		}
+		c.Author.ID = c.AuthorID
+		c.Author.Nickname = safeCommenterNickname(nickname)
+		c.Author.Avatar = avatar
 		out = append(out, c)
 	}
 	if len(out) > limit {
@@ -482,6 +523,7 @@ func (p *pgComments) Create(ctx context.Context, anomalyID, authorID uuid.UUID, 
 	}
 	defer tx.Rollback(ctx)
 	var c comments.Comment
+	var nickname, avatar string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO anomaly_comments (anomaly_id,author_id,text)
 		VALUES ($1,$2,$3)
@@ -490,6 +532,12 @@ func (p *pgComments) Create(ctx context.Context, anomalyID, authorID uuid.UUID, 
 	if err != nil {
 		return comments.Comment{}, err
 	}
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(nickname,''), COALESCE(avatar_url,'') FROM users WHERE id=$1`, authorID).Scan(&nickname, &avatar); err != nil {
+		return comments.Comment{}, err
+	}
+	c.Author.ID = c.AuthorID
+	c.Author.Nickname = safeCommenterNickname(nickname)
+	c.Author.Avatar = avatar
 	if _, err := tx.Exec(ctx, `UPDATE anomalies SET comment_count=comment_count+1 WHERE id=$1`, anomalyID); err != nil {
 		return comments.Comment{}, err
 	}

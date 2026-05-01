@@ -343,10 +343,40 @@ func (m *memoryAnomalies) Unlike(_ context.Context, userID, anomalyID uuid.UUID)
 	return nil
 }
 
+func (m *memoryAnomalies) ViewerHasLiked(_ context.Context, userID, anomalyID uuid.UUID) (bool, error) {
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	if _, ok := m.state.likes[anomalyID][userID]; ok {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (m *memoryAnomalies) ViewerHasLikedMap(_ context.Context, userID uuid.UUID, anomalyIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	out := make(map[uuid.UUID]bool, len(anomalyIDs))
+	for _, id := range anomalyIDs {
+		_, liked := m.state.likes[id][userID]
+		out[id] = liked
+	}
+	return out, nil
+}
+
 func (m *memoryComments) ListByAnomaly(_ context.Context, anomalyID uuid.UUID, _ string, limit int) ([]comments.Comment, string, error) {
 	m.state.mu.RLock()
 	defer m.state.mu.RUnlock()
 	out := append([]comments.Comment{}, m.state.comments[anomalyID]...)
+	for i := range out {
+		if u, ok := m.state.usersByID[out[i].AuthorID]; ok {
+			out[i].Author.ID = u.ID
+			out[i].Author.Nickname = safeCommenterNickname(u.Nickname)
+			out[i].Author.Avatar = u.AvatarURL
+		} else {
+			out[i].Author.ID = out[i].AuthorID
+			out[i].Author.Nickname = "UX Anomalies user"
+		}
+	}
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
@@ -367,8 +397,24 @@ func (m *memoryComments) Create(_ context.Context, anomalyID, authorID uuid.UUID
 		return comments.Comment{}, errors.New("anomaly not found")
 	}
 	c := comments.Comment{ID: uuid.New(), AnomalyID: anomalyID, AuthorID: authorID, Text: strings.TrimSpace(text), CreatedAt: time.Now()}
+	if u, ok := m.state.usersByID[authorID]; ok {
+		c.Author.ID = u.ID
+		c.Author.Nickname = safeCommenterNickname(u.Nickname)
+		c.Author.Avatar = u.AvatarURL
+	} else {
+		c.Author.ID = authorID
+		c.Author.Nickname = "UX Anomalies user"
+	}
 	m.state.comments[anomalyID] = append(m.state.comments[anomalyID], c)
 	a.CommentCount++
 	m.state.anomalies[anomalyID] = a
 	return c, nil
+}
+
+func safeCommenterNickname(n string) string {
+	n = strings.TrimSpace(n)
+	if n == "" || strings.Contains(n, "@") {
+		return "UX Anomalies user"
+	}
+	return n
 }

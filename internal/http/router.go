@@ -39,11 +39,11 @@ func NewRouter(cfg config.Config, logger *slog.Logger, tokens *auth.TokenManager
 		v1.Use(middleware.BFFSecret(cfg.BFFSecret))
 		v1.Group(func(pub chi.Router) {
 			pub.Use(middleware.RateLimit(rate.Limit(20), 40))
-			pub.Get("/feed", handleFeed(st, cfg.GCSSignedURLTTL, s))
+			pub.Get("/feed", handleFeed(tokens, st, cfg.GCSSignedURLTTL, s))
 			pub.Get("/users/search", handleUserSearch(s))
 			pub.Get("/public/anomalies/sitemap", handlePublicSitemap(s))
-			pub.Get("/public/anomalies/{slug}", handlePublicAnomalyBySlug(st, cfg.GCSSignedURLTTL, s))
-			pub.Get("/anomalies/{id}", handleGetAnomaly(st, cfg.GCSSignedURLTTL, s))
+			pub.Get("/public/anomalies/{slug}", handlePublicAnomalyBySlug(tokens, st, cfg.GCSSignedURLTTL, s))
+			pub.Get("/anomalies/{id}", handleGetAnomaly(tokens, st, cfg.GCSSignedURLTTL, s))
 			pub.Get("/anomalies/{id}/comments", handleListComments(s))
 			pub.Get("/users/{nickname}", handleGetPublicUser(st, cfg.GCSSignedURLTTL, s))
 		})
@@ -77,7 +77,7 @@ func limit(r *http.Request, def int) int {
 	return n
 }
 
-func handleFeed(st storage.Store, ttl time.Duration, s Services) http.HandlerFunc {
+func handleFeed(tokens *auth.TokenManager, st storage.Store, ttl time.Duration, s Services) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter := anomalies.FeedFilter{
 			Q:              strings.TrimSpace(r.URL.Query().Get("q")),
@@ -97,6 +97,18 @@ func handleFeed(st storage.Store, ttl time.Duration, s Services) http.HandlerFun
 					if serr == nil {
 						items[i].ThumbnailURL = u
 					}
+				}
+			}
+		}
+		if uid, ok := optionalViewerID(tokens, r); ok {
+			ids := make([]uuid.UUID, 0, len(items))
+			for _, it := range items {
+				ids = append(ids, it.ID)
+			}
+			likedMap, err := s.Anomalies.ViewerHasLikedMap(r.Context(), uid, ids)
+			if err == nil {
+				for i := range items {
+					items[i].ViewerHasLiked = likedMap[items[i].ID]
 				}
 			}
 		}
@@ -127,7 +139,7 @@ func handlePublicSitemap(s Services) http.HandlerFunc {
 	}
 }
 
-func handlePublicAnomalyBySlug(st storage.Store, ttl time.Duration, s Services) http.HandlerFunc {
+func handlePublicAnomalyBySlug(tokens *auth.TokenManager, st storage.Store, ttl time.Duration, s Services) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slug := strings.TrimSpace(chi.URLParam(r, "slug"))
 		if slug == "" {
@@ -145,11 +157,17 @@ func handlePublicAnomalyBySlug(st storage.Store, ttl time.Duration, s Services) 
 				a.Images[i].URL = u
 			}
 		}
+		if uid, ok := optionalViewerID(tokens, r); ok {
+			liked, err := s.Anomalies.ViewerHasLiked(r.Context(), uid, a.ID)
+			if err == nil {
+				a.ViewerHasLiked = liked
+			}
+		}
 		response.JSON(w, http.StatusOK, a)
 	}
 }
 
-func handleGetAnomaly(st storage.Store, ttl time.Duration, s Services) http.HandlerFunc {
+func handleGetAnomaly(tokens *auth.TokenManager, st storage.Store, ttl time.Duration, s Services) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(chi.URLParam(r, "id"))
 		if err != nil {
@@ -165,6 +183,12 @@ func handleGetAnomaly(st storage.Store, ttl time.Duration, s Services) http.Hand
 			u, err := st.SignedGetURL(r.Context(), a.Images[i].Bucket, a.Images[i].ObjectName, ttl)
 			if err == nil {
 				a.Images[i].URL = u
+			}
+		}
+		if uid, ok := optionalViewerID(tokens, r); ok {
+			liked, err := s.Anomalies.ViewerHasLiked(r.Context(), uid, a.ID)
+			if err == nil {
+				a.ViewerHasLiked = liked
 			}
 		}
 		response.JSON(w, http.StatusOK, a)
@@ -433,7 +457,12 @@ func handleLike(s Services) http.HandlerFunc {
 			response.Error(w, http.StatusBadRequest, "invalid_input", err.Error())
 			return
 		}
-		response.JSON(w, http.StatusOK, map[string]string{"status": "liked"})
+		a, err := s.Anomalies.GetByID(r.Context(), id)
+		if err != nil {
+			response.JSON(w, http.StatusOK, map[string]any{"status": "liked", "viewer_has_liked": true})
+			return
+		}
+		response.JSON(w, http.StatusOK, map[string]any{"status": "liked", "like_count": a.LikeCount, "viewer_has_liked": true})
 	}
 }
 
@@ -449,8 +478,32 @@ func handleUnlike(s Services) http.HandlerFunc {
 			response.Error(w, http.StatusBadRequest, "invalid_input", err.Error())
 			return
 		}
-		response.JSON(w, http.StatusOK, map[string]string{"status": "unliked"})
+		a, err := s.Anomalies.GetByID(r.Context(), id)
+		if err != nil {
+			response.JSON(w, http.StatusOK, map[string]any{"status": "unliked", "viewer_has_liked": false})
+			return
+		}
+		response.JSON(w, http.StatusOK, map[string]any{"status": "unliked", "like_count": a.LikeCount, "viewer_has_liked": false})
 	}
+}
+
+func optionalViewerID(tokens *auth.TokenManager, r *http.Request) (uuid.UUID, bool) {
+	if tokens == nil {
+		return uuid.Nil, false
+	}
+	h := strings.TrimSpace(r.Header.Get("Authorization"))
+	if !strings.HasPrefix(h, "Bearer ") {
+		return uuid.Nil, false
+	}
+	claims, err := tokens.Parse(strings.TrimSpace(strings.TrimPrefix(h, "Bearer ")))
+	if err != nil {
+		return uuid.Nil, false
+	}
+	uid, err := uuid.Parse(claims.UserID)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return uid, true
 }
 
 func handleCreateComment(s Services) http.HandlerFunc {

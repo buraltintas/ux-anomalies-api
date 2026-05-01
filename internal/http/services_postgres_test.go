@@ -128,12 +128,50 @@ func TestPostgresServices_Integration(t *testing.T) {
 	})
 
 	t.Run("comment create and comment_count", func(t *testing.T) {
-		if _, err := svc.Comments.Create(ctx, created.ID, user2, "hello"); err != nil {
+		c, err := svc.Comments.Create(ctx, created.ID, user2, "hello")
+		if err != nil {
 			t.Fatal(err)
+		}
+		if c.Author.ID != user2 || c.Author.Nickname == "" {
+			t.Fatalf("expected author object in create response, got %+v", c.Author)
+		}
+		items, _, err := svc.Comments.ListByAnomaly(ctx, created.ID, "", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(items) == 0 || items[0].Author.ID == uuid.Nil || items[0].Author.Nickname == "" {
+			t.Fatalf("expected author object in list response, got %+v", items)
 		}
 		a, _ := svc.Anomalies.GetByID(ctx, created.ID)
 		if a.CommentCount != 1 {
 			t.Fatalf("expected comment_count=1 got=%d", a.CommentCount)
+		}
+	})
+
+	t.Run("email-like nickname is sanitized for comments", func(t *testing.T) {
+		emailNickUser := seedUser(t, ctx, pool, "mailnick@example.com", "mailnick@example.com")
+		c, err := svc.Comments.Create(ctx, created.ID, emailNickUser, "safe")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Author.Nickname != "UX Anomalies user" {
+			t.Fatalf("expected sanitized nickname, got %q", c.Author.Nickname)
+		}
+		items, _, err := svc.Comments.ListByAnomaly(ctx, created.ID, "", 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, it := range items {
+			if it.AuthorID == emailNickUser {
+				found = true
+				if it.Author.Nickname != "UX Anomalies user" {
+					t.Fatalf("expected sanitized nickname in list, got %q", it.Author.Nickname)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("expected comment from email-like nickname user in list")
 		}
 	})
 
