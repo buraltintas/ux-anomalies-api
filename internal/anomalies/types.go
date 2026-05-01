@@ -21,6 +21,8 @@ const (
 
 type Anomaly struct {
 	ID           uuid.UUID `json:"id"`
+	Slug         string    `json:"slug"`
+	Title        string    `json:"title"`
 	AuthorID     uuid.UUID `json:"author_id"`
 	Category     Category  `json:"category"`
 	Description  string    `json:"description"`
@@ -43,6 +45,8 @@ type Image struct {
 
 type FeedItem struct {
 	ID           uuid.UUID `json:"id"`
+	Slug         string    `json:"slug"`
+	Title        string    `json:"title"`
 	Category     Category  `json:"category"`
 	Description  string    `json:"description"`
 	ThumbnailURL string    `json:"thumbnail_url"`
@@ -57,6 +61,7 @@ type FeedItem struct {
 }
 
 type CreateInput struct {
+	Title       string
 	Category    Category
 	Description string
 	SourceURL   string
@@ -75,10 +80,18 @@ type FeedFilter struct {
 	AuthorNickname string
 }
 
+type SitemapItem struct {
+	ID        uuid.UUID `json:"id"`
+	Slug      string    `json:"slug"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 type Service interface {
 	GetFeed(ctx context.Context, filter FeedFilter, cursor string, limit int) ([]FeedItem, string, error)
 	ListByAuthorNickname(ctx context.Context, nickname, cursor string, limit int) ([]FeedItem, string, error)
 	GetByID(ctx context.Context, id uuid.UUID) (Anomaly, error)
+	GetPublicBySlug(ctx context.Context, slug string) (Anomaly, error)
+	GetPublicSitemap(ctx context.Context, cursor string, limit int) ([]SitemapItem, string, error)
 	Create(ctx context.Context, authorID uuid.UUID, in CreateInput) (Anomaly, error)
 	Update(ctx context.Context, authorID, anomalyID uuid.UUID, in UpdateInput) (Anomaly, error)
 	Like(ctx context.Context, userID, anomalyID uuid.UUID) error

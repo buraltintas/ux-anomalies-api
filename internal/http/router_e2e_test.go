@@ -120,6 +120,7 @@ func TestRouterE2E_V1Flows(t *testing.T) {
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
 	_ = w.WriteField("category", "web")
+	_ = w.WriteField("title", "Instagram Shows Dates as 383w")
 	_ = w.WriteField("description", "desc")
 	_ = w.WriteField("source_url", "https://example.com")
 	fw, _ := w.CreateFormFile("images", "img.png")
@@ -139,12 +140,13 @@ func TestRouterE2E_V1Flows(t *testing.T) {
 	}
 	var created struct {
 		ID     string `json:"id"`
+		Slug   string `json:"slug"`
 		Images []struct {
 			URL string `json:"url"`
 		} `json:"images"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &created)
-	if created.ID == "" || len(created.Images) != 1 || !strings.HasPrefix(created.Images[0].URL, "https://signed.local/") {
+	if created.ID == "" || created.Slug == "" || len(created.Images) != 1 || !strings.HasPrefix(created.Images[0].URL, "https://signed.local/") {
 		t.Fatalf("unexpected create response: %s", rec.Body.String())
 	}
 	anomalyID := created.ID
@@ -164,6 +166,47 @@ func TestRouterE2E_V1Flows(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "https://signed.local/") {
 		t.Fatalf("GET anomaly detail failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// public detail by slug
+	req = httptest.NewRequest(http.MethodGet, "/v1/public/anomalies/"+created.Slug, nil)
+	req.Header.Set("X-BFF-SECRET", "bff-secret")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), created.ID) {
+		t.Fatalf("public detail by slug failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// sitemap only includes public/published/approved
+	_, err = pool.Exec(ctx, `UPDATE anomalies SET is_public=FALSE WHERE id=$1`, anomalyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/v1/public/anomalies/sitemap", nil)
+	req.Header.Set("X-BFF-SECRET", "bff-secret")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), anomalyID) {
+		t.Fatalf("sitemap should exclude non-public anomalies: %d %s", rec.Code, rec.Body.String())
+	}
+	_, err = pool.Exec(ctx, `UPDATE anomalies SET is_public=TRUE WHERE id=$1`, anomalyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// public endpoints must still require BFF secret
+	req = httptest.NewRequest(http.MethodGet, "/v1/public/anomalies/sitemap", nil)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("sitemap without bff secret must be 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/public/anomalies/"+created.Slug, nil)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("public slug detail without bff secret must be 403, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
 	// 5) profile anomaly listing

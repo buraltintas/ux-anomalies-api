@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -128,7 +129,7 @@ func (m *memoryAnomalies) GetFeed(_ context.Context, filter anomalies.FeedFilter
 		if filter.Q != "" && !strings.Contains(strings.ToLower(a.Description), strings.ToLower(filter.Q)) {
 			continue
 		}
-		item := anomalies.FeedItem{ID: a.ID, Category: a.Category, Description: a.Description, LikeCount: a.LikeCount, CommentCount: a.CommentCount, CreatedAt: a.CreatedAt}
+		item := anomalies.FeedItem{ID: a.ID, Slug: a.Slug, Title: a.Title, Category: a.Category, Description: a.Description, LikeCount: a.LikeCount, CommentCount: a.CommentCount, CreatedAt: a.CreatedAt}
 		if len(a.Images) > 0 {
 			item.ThumbnailURL = a.Images[0].URL
 		}
@@ -166,6 +167,8 @@ func (m *memoryAnomalies) ListByAuthorNickname(_ context.Context, nickname, _ st
 			continue
 		}
 		item := anomalies.FeedItem{ID: a.ID, Category: a.Category, Description: a.Description, LikeCount: a.LikeCount, CommentCount: a.CommentCount, CreatedAt: a.CreatedAt}
+		item.Slug = a.Slug
+		item.Title = a.Title
 		if len(a.Images) > 0 {
 			item.ThumbnailURL = a.Images[0].URL
 		}
@@ -207,11 +210,76 @@ func (m *memoryAnomalies) Create(_ context.Context, authorID uuid.UUID, in anoma
 		return anomalies.Anomaly{}, errors.New("invalid category")
 	}
 	now := time.Now()
-	a := anomalies.Anomaly{ID: uuid.New(), AuthorID: authorID, Category: in.Category, Description: strings.TrimSpace(in.Description), SourceURL: strings.TrimSpace(in.SourceURL), Images: in.Images, CreatedAt: now, UpdatedAt: now}
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		title = strings.TrimSpace(in.Description)
+	}
+	a := anomalies.Anomaly{
+		ID:          uuid.New(),
+		Slug:        slugify(title),
+		Title:       title,
+		AuthorID:    authorID,
+		Category:    in.Category,
+		Description: strings.TrimSpace(in.Description),
+		SourceURL:   strings.TrimSpace(in.SourceURL),
+		Images:      in.Images,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
 	m.state.anomalies[a.ID] = a
 	return a, nil
+}
+
+func (m *memoryAnomalies) GetPublicBySlug(_ context.Context, slug string) (anomalies.Anomaly, error) {
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	for _, a := range m.state.anomalies {
+		if a.Slug == slug {
+			return a, nil
+		}
+	}
+	return anomalies.Anomaly{}, errors.New("not found")
+}
+
+func (m *memoryAnomalies) GetPublicSitemap(_ context.Context, _ string, limit int) ([]anomalies.SitemapItem, string, error) {
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	out := make([]anomalies.SitemapItem, 0, len(m.state.anomalies))
+	for _, a := range m.state.anomalies {
+		out = append(out, anomalies.SitemapItem{ID: a.ID, Slug: a.Slug, UpdatedAt: a.UpdatedAt})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, "", nil
+}
+
+func slugify(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	v = strings.ReplaceAll(v, "_", "-")
+	var b strings.Builder
+	lastDash := false
+	for _, r := range v {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			b.WriteRune(r)
+			lastDash = false
+		} else if !lastDash {
+			b.WriteRune('-')
+			lastDash = true
+		}
+	}
+	s := strings.Trim(b.String(), "-")
+	if s == "" {
+		return fmt.Sprintf("anomaly-%d", time.Now().Unix())
+	}
+	return s
 }
 
 func (m *memoryAnomalies) Update(_ context.Context, authorID, anomalyID uuid.UUID, in anomalies.UpdateInput) (anomalies.Anomaly, error) {

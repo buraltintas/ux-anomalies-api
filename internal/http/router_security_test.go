@@ -67,6 +67,22 @@ func TestRouterSecurityAndBasicFlows(t *testing.T) {
 	}
 	assertErrorShape(t, rec.Body.String())
 
+	req = httptest.NewRequest(http.MethodGet, "/v1/public/anomalies/sitemap", nil)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("sitemap without bff expected 403 got %d", rec.Code)
+	}
+	assertErrorShape(t, rec.Body.String())
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/public/anomalies/some-slug", nil)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("public anomaly detail without bff expected 403 got %d", rec.Code)
+	}
+	assertErrorShape(t, rec.Body.String())
+
 	// auth-required endpoint with bff but missing bearer should be 401
 	req = httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 	req.Header.Set("X-BFF-SECRET", "bff-secret")

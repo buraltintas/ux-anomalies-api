@@ -41,6 +41,8 @@ func NewRouter(cfg config.Config, logger *slog.Logger, tokens *auth.TokenManager
 			pub.Use(middleware.RateLimit(rate.Limit(20), 40))
 			pub.Get("/feed", handleFeed(st, cfg.GCSSignedURLTTL, s))
 			pub.Get("/users/search", handleUserSearch(s))
+			pub.Get("/public/anomalies/sitemap", handlePublicSitemap(s))
+			pub.Get("/public/anomalies/{slug}", handlePublicAnomalyBySlug(st, cfg.GCSSignedURLTTL, s))
 			pub.Get("/anomalies/{id}", handleGetAnomaly(st, cfg.GCSSignedURLTTL, s))
 			pub.Get("/anomalies/{id}/comments", handleListComments(s))
 			pub.Get("/users/{nickname}", handleGetPublicUser(st, cfg.GCSSignedURLTTL, s))
@@ -111,6 +113,39 @@ func handleUserSearch(s Services) http.HandlerFunc {
 			return
 		}
 		response.JSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
+	}
+}
+
+func handlePublicSitemap(s Services) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		items, next, err := s.Anomalies.GetPublicSitemap(r.Context(), r.URL.Query().Get("cursor"), limit(r, 500))
+		if err != nil {
+			response.Error(w, http.StatusInternalServerError, "internal_error", "internal server error")
+			return
+		}
+		response.JSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
+	}
+}
+
+func handlePublicAnomalyBySlug(st storage.Store, ttl time.Duration, s Services) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		slug := strings.TrimSpace(chi.URLParam(r, "slug"))
+		if slug == "" {
+			response.Error(w, http.StatusBadRequest, "invalid_input", "invalid slug")
+			return
+		}
+		a, err := s.Anomalies.GetPublicBySlug(r.Context(), slug)
+		if err != nil {
+			response.Error(w, http.StatusNotFound, "not_found", "not found")
+			return
+		}
+		for i := range a.Images {
+			u, err := st.SignedGetURL(r.Context(), a.Images[i].Bucket, a.Images[i].ObjectName, ttl)
+			if err == nil {
+				a.Images[i].URL = u
+			}
+		}
+		response.JSON(w, http.StatusOK, a)
 	}
 }
 
@@ -279,6 +314,7 @@ func handleCreateAnomaly(cfg config.Config, st storage.Store, s Services) http.H
 			return
 		}
 		category := anomalies.Category(r.FormValue("category"))
+		title := r.FormValue("title")
 		desc := r.FormValue("description")
 		src, err := validation.NormalizeOptionalURL(r.FormValue("source_url"))
 		if err != nil {
@@ -335,6 +371,7 @@ func handleCreateAnomaly(cfg config.Config, st storage.Store, s Services) http.H
 			})
 		}
 		a, err := s.Anomalies.Create(r.Context(), uid, anomalies.CreateInput{
+			Title:       title,
 			Category:    category,
 			Description: desc,
 			SourceURL:   src,

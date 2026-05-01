@@ -48,6 +48,7 @@ func TestPostgresServices_Integration(t *testing.T) {
 	var created anomalies.Anomaly
 	t.Run("anomaly create with image metadata + detail read", func(t *testing.T) {
 		a, err := svc.Anomalies.Create(ctx, user1, anomalies.CreateInput{
+			Title:       "Duplicate Title",
 			Category:    anomalies.CategoryWeb,
 			Description: "desc",
 			SourceURL:   "https://example.com",
@@ -60,16 +61,34 @@ func TestPostgresServices_Integration(t *testing.T) {
 			t.Fatalf("create anomaly failed: %v", err)
 		}
 		created = a
+		if created.Slug == "" {
+			t.Fatal("expected slug to be generated")
+		}
 		got, err := svc.Anomalies.GetByID(ctx, a.ID)
 		if err != nil || len(got.Images) != 2 {
 			t.Fatalf("detail read failed: %v", err)
 		}
 	})
 
+	t.Run("slug uniqueness", func(t *testing.T) {
+		a2, err := svc.Anomalies.Create(ctx, user1, anomalies.CreateInput{
+			Title:       "Duplicate Title",
+			Category:    anomalies.CategoryWeb,
+			Description: "desc2",
+			Images:      []anomalies.Image{{Bucket: "b", ObjectName: "u2", MimeType: "image/png", ByteSize: 1, Position: 1}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a2.Slug == created.Slug {
+			t.Fatalf("expected unique slug, got same %s", a2.Slug)
+		}
+	})
+
 	t.Run("feed pagination", func(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			_, err := svc.Anomalies.Create(ctx, user1, anomalies.CreateInput{
-				Category: anomalies.CategoryWeb, Description: "x", Images: []anomalies.Image{{Bucket: "b", ObjectName: uuid.NewString(), MimeType: "image/png", ByteSize: 1, Position: 1}},
+				Title: "X", Category: anomalies.CategoryWeb, Description: "x", Images: []anomalies.Image{{Bucket: "b", ObjectName: uuid.NewString(), MimeType: "image/png", ByteSize: 1, Position: 1}},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -136,6 +155,28 @@ func TestPostgresServices_Integration(t *testing.T) {
 			t.Fatal("expected anomalies for profile user")
 		}
 	})
+
+	t.Run("public by slug and sitemap visibility", func(t *testing.T) {
+		got, err := svc.Anomalies.GetPublicBySlug(ctx, created.Slug)
+		if err != nil || got.ID != created.ID {
+			t.Fatalf("get public by slug failed: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE anomalies SET is_public=FALSE WHERE id=$1`, created.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.Anomalies.GetPublicBySlug(ctx, created.Slug); err == nil {
+			t.Fatal("expected non-public anomaly to be hidden")
+		}
+		items, _, err := svc.Anomalies.GetPublicSitemap(ctx, "", 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, it := range items {
+			if it.ID == created.ID {
+				t.Fatal("non-public anomaly should not appear in sitemap")
+			}
+		}
+	})
 }
 
 func resetAll(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
@@ -171,12 +212,17 @@ func resetAll(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		);
 		CREATE TABLE anomalies (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			slug TEXT NOT NULL UNIQUE,
+			title TEXT NOT NULL,
 			author_id UUID NOT NULL REFERENCES users(id),
 			category TEXT NOT NULL,
 			description TEXT NOT NULL,
 			source_url TEXT,
 			like_count INTEGER NOT NULL DEFAULT 0,
 			comment_count INTEGER NOT NULL DEFAULT 0,
+			is_public BOOLEAN NOT NULL DEFAULT TRUE,
+			is_published BOOLEAN NOT NULL DEFAULT TRUE,
+			is_approved BOOLEAN NOT NULL DEFAULT TRUE,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		);

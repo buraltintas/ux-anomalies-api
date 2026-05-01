@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -136,13 +138,21 @@ func (p *pgAnomalies) Create(ctx context.Context, authorID uuid.UUID, in anomali
 		return anomalies.Anomaly{}, err
 	}
 	defer tx.Rollback(ctx)
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		title = strings.TrimSpace(in.Description)
+	}
+	slug, err := allocateUniqueSlug(ctx, tx, title)
+	if err != nil {
+		return anomalies.Anomaly{}, err
+	}
 	var a anomalies.Anomaly
 	err = tx.QueryRow(ctx, `
-		INSERT INTO anomalies (author_id, category, description, source_url)
-		VALUES ($1,$2,$3,$4)
-		RETURNING id,author_id,category,description,COALESCE(source_url,''),like_count,comment_count,created_at,updated_at
-	`, authorID, in.Category, strings.TrimSpace(in.Description), in.SourceURL).
-		Scan(&a.ID, &a.AuthorID, &a.Category, &a.Description, &a.SourceURL, &a.LikeCount, &a.CommentCount, &a.CreatedAt, &a.UpdatedAt)
+		INSERT INTO anomalies (slug, title, author_id, category, description, source_url)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		RETURNING id,slug,title,author_id,category,description,COALESCE(source_url,''),like_count,comment_count,created_at,updated_at
+	`, slug, title, authorID, in.Category, strings.TrimSpace(in.Description), in.SourceURL).
+		Scan(&a.ID, &a.Slug, &a.Title, &a.AuthorID, &a.Category, &a.Description, &a.SourceURL, &a.LikeCount, &a.CommentCount, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return anomalies.Anomaly{}, err
 	}
@@ -181,9 +191,9 @@ func (p *pgAnomalies) Update(ctx context.Context, authorID, anomalyID uuid.UUID,
 func (p *pgAnomalies) GetByID(ctx context.Context, id uuid.UUID) (anomalies.Anomaly, error) {
 	var a anomalies.Anomaly
 	err := p.pool.QueryRow(ctx, `
-		SELECT id,author_id,category,description,COALESCE(source_url,''),like_count,comment_count,created_at,updated_at
+		SELECT id,slug,title,author_id,category,description,COALESCE(source_url,''),like_count,comment_count,created_at,updated_at
 		FROM anomalies WHERE id=$1
-	`, id).Scan(&a.ID, &a.AuthorID, &a.Category, &a.Description, &a.SourceURL, &a.LikeCount, &a.CommentCount, &a.CreatedAt, &a.UpdatedAt)
+	`, id).Scan(&a.ID, &a.Slug, &a.Title, &a.AuthorID, &a.Category, &a.Description, &a.SourceURL, &a.LikeCount, &a.CommentCount, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return anomalies.Anomaly{}, err
 	}
@@ -222,6 +232,7 @@ func (p *pgAnomalies) GetFeed(ctx context.Context, filter anomalies.FeedFilter, 
 	}
 	rows, err := p.pool.Query(ctx, `
 		SELECT a.id,a.category,a.description,a.like_count,a.comment_count,a.created_at,u.id,u.nickname,COALESCE(u.avatar_url,''),
+		       a.slug,a.title,
 		       COALESCE(img.bucket,''),COALESCE(img.object_name,'')
 		FROM anomalies a
 		JOIN users u ON u.id=a.author_id
@@ -229,6 +240,7 @@ func (p *pgAnomalies) GetFeed(ctx context.Context, filter anomalies.FeedFilter, 
 			SELECT bucket,object_name FROM anomaly_images ai WHERE ai.anomaly_id=a.id ORDER BY position ASC LIMIT 1
 		) img ON TRUE
 		WHERE (a.created_at, a.id) < ($1,$2)
+		  AND a.is_public = TRUE AND a.is_published = TRUE AND a.is_approved = TRUE
 		  AND ($3 = '' OR a.description ILIKE '%' || $3 || '%')
 		  AND ($4 = '' OR a.category = $4)
 		  AND ($5 = '' OR u.nickname_normalized = $5)
@@ -244,7 +256,7 @@ func (p *pgAnomalies) GetFeed(ctx context.Context, filter anomalies.FeedFilter, 
 	for rows.Next() {
 		var it anomalies.FeedItem
 		var bkt, obj string
-		if err := rows.Scan(&it.ID, &it.Category, &it.Description, &it.LikeCount, &it.CommentCount, &it.CreatedAt, &it.Author.ID, &it.Author.Nickname, &it.Author.Avatar, &bkt, &obj); err != nil {
+		if err := rows.Scan(&it.ID, &it.Category, &it.Description, &it.LikeCount, &it.CommentCount, &it.CreatedAt, &it.Author.ID, &it.Author.Nickname, &it.Author.Avatar, &it.Slug, &it.Title, &bkt, &obj); err != nil {
 			return nil, "", err
 		}
 		if bkt != "" && obj != "" {
@@ -270,6 +282,7 @@ func (p *pgAnomalies) ListByAuthorNickname(ctx context.Context, nickname, cursor
 	}
 	rows, err := p.pool.Query(ctx, `
 		SELECT a.id,a.category,a.description,a.like_count,a.comment_count,a.created_at,u.id,u.nickname,COALESCE(u.avatar_url,''),
+		       a.slug,a.title,
 		       COALESCE(img.bucket,''),COALESCE(img.object_name,'')
 		FROM anomalies a
 		JOIN users u ON u.id=a.author_id
@@ -277,6 +290,7 @@ func (p *pgAnomalies) ListByAuthorNickname(ctx context.Context, nickname, cursor
 			SELECT bucket,object_name FROM anomaly_images ai WHERE ai.anomaly_id=a.id ORDER BY position ASC LIMIT 1
 		) img ON TRUE
 		WHERE u.nickname_normalized=$1 AND (a.created_at, a.id) < ($2,$3)
+		  AND a.is_public = TRUE AND a.is_published = TRUE AND a.is_approved = TRUE
 		ORDER BY a.created_at DESC, a.id DESC
 		LIMIT $4
 	`, validation.NormalizeNickname(nickname), ts, id, limit+1)
@@ -289,7 +303,7 @@ func (p *pgAnomalies) ListByAuthorNickname(ctx context.Context, nickname, cursor
 	for rows.Next() {
 		var it anomalies.FeedItem
 		var bkt, obj string
-		if err := rows.Scan(&it.ID, &it.Category, &it.Description, &it.LikeCount, &it.CommentCount, &it.CreatedAt, &it.Author.ID, &it.Author.Nickname, &it.Author.Avatar, &bkt, &obj); err != nil {
+		if err := rows.Scan(&it.ID, &it.Category, &it.Description, &it.LikeCount, &it.CommentCount, &it.CreatedAt, &it.Author.ID, &it.Author.Nickname, &it.Author.Avatar, &it.Slug, &it.Title, &bkt, &obj); err != nil {
 			return nil, "", err
 		}
 		if bkt != "" && obj != "" {
@@ -303,6 +317,82 @@ func (p *pgAnomalies) ListByAuthorNickname(ctx context.Context, nickname, cursor
 		items = items[:limit]
 	}
 	return items, next, rows.Err()
+}
+
+func (p *pgAnomalies) GetPublicBySlug(ctx context.Context, slug string) (anomalies.Anomaly, error) {
+	var id uuid.UUID
+	err := p.pool.QueryRow(ctx, `
+		SELECT id
+		FROM anomalies
+		WHERE slug=$1 AND is_public=TRUE AND is_published=TRUE AND is_approved=TRUE
+	`, strings.TrimSpace(slug)).Scan(&id)
+	if err != nil {
+		return anomalies.Anomaly{}, err
+	}
+	return p.GetByID(ctx, id)
+}
+
+func (p *pgAnomalies) GetPublicSitemap(ctx context.Context, cursor string, limit int) ([]anomalies.SitemapItem, string, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	ts, id, err := decodeCursor(cursor)
+	if err != nil {
+		return nil, "", err
+	}
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, slug, updated_at
+		FROM anomalies
+		WHERE is_public=TRUE AND is_published=TRUE AND is_approved=TRUE
+		  AND (updated_at, id) < ($1, $2)
+		ORDER BY updated_at DESC, id DESC
+		LIMIT $3
+	`, ts, id, limit+1)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	out := []anomalies.SitemapItem{}
+	var next string
+	for rows.Next() {
+		var it anomalies.SitemapItem
+		if err := rows.Scan(&it.ID, &it.Slug, &it.UpdatedAt); err != nil {
+			return nil, "", err
+		}
+		out = append(out, it)
+	}
+	if len(out) > limit {
+		last := out[limit-1]
+		next = encodeCursor(last.UpdatedAt, last.ID)
+		out = out[:limit]
+	}
+	return out, next, rows.Err()
+}
+
+var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
+
+func allocateUniqueSlug(ctx context.Context, tx pgx.Tx, title string) (string, error) {
+	base := strings.ToLower(strings.TrimSpace(title))
+	base = strings.ReplaceAll(base, "_", "-")
+	base = nonSlug.ReplaceAllString(base, "-")
+	base = strings.Trim(base, "-")
+	if base == "" {
+		base = "anomaly"
+	}
+	for i := 1; i < 10000; i++ {
+		candidate := base
+		if i > 1 {
+			candidate = base + "-" + strconv.Itoa(i)
+		}
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM anomalies WHERE slug=$1)`, candidate).Scan(&exists); err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+	}
+	return "", errors.New("unable to allocate unique slug")
 }
 
 func (p *pgAnomalies) Like(ctx context.Context, userID, anomalyID uuid.UUID) error {

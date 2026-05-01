@@ -127,6 +127,8 @@ Production note:
 Public (BFF-gated):  
 `GET /v1/feed?q=&category=&author_nickname=&cursor=&limit=`  
 `GET /v1/users/search?q=&cursor=&limit=`  
+`GET /v1/public/anomalies/sitemap`  
+`GET /v1/public/anomalies/{slug}`  
 `GET /v1/anomalies/{id}`  
 `GET /v1/anomalies/{id}/comments`  
 `GET /v1/users/{nickname}` (supports URL-encoded nickname lookup)
