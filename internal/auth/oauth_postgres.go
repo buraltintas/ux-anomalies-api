@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,6 +48,16 @@ func (r *PostgresOAuthRepo) upsertOnce(ctx context.Context, in OAuthUpsertInput)
 	if u, found, err := findByProvider(ctx, tx, in.Provider, in.ProviderUserID); err != nil {
 		return OAuthUser{}, false, err
 	} else if found {
+		if err := updateAvatarIfProvided(ctx, tx, u.UserID, in.AvatarURL); err != nil {
+			return OAuthUser{}, false, err
+		}
+		updated, found, err := findByProvider(ctx, tx, in.Provider, in.ProviderUserID)
+		if err != nil {
+			return OAuthUser{}, false, err
+		}
+		if found {
+			u = updated
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return OAuthUser{}, false, err
 		}
@@ -57,6 +68,9 @@ func (r *PostgresOAuthRepo) upsertOnce(ctx context.Context, in OAuthUpsertInput)
 	if u, found, err := findByEmail(ctx, tx, in.Email); err != nil {
 		return OAuthUser{}, false, err
 	} else if found {
+		if err := updateAvatarIfProvided(ctx, tx, u.UserID, in.AvatarURL); err != nil {
+			return OAuthUser{}, false, err
+		}
 		_, err = tx.Exec(ctx, `
 			INSERT INTO oauth_accounts (user_id, provider, provider_user_id, provider_email, provider_email_verified)
 			VALUES ($1, $2, $3, $4, $5)
@@ -188,4 +202,13 @@ func isRetryable(err error) bool {
 		return false
 	}
 	return pgErr.Code == "23505" || pgErr.Code == "40001" || pgErr.Code == "40P01"
+}
+
+func updateAvatarIfProvided(ctx context.Context, tx pgx.Tx, userID uuid.UUID, avatarURL string) error {
+	avatarURL = strings.TrimSpace(avatarURL)
+	if avatarURL == "" {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `UPDATE users SET avatar_url=$1, updated_at=now() WHERE id=$2`, avatarURL, userID)
+	return err
 }

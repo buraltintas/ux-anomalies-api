@@ -43,12 +43,16 @@ func TestPostgresOAuthRepo_IntegrationScenarios(t *testing.T) {
 			ProviderUserID: "g-111",
 			Email:          "existing@example.com",
 			EmailVerified:  true,
+			AvatarURL:      "https://cdn.example.com/new-avatar.png",
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if u.Email != "existing@example.com" {
 			t.Fatalf("unexpected user returned: %+v", u)
+		}
+		if u.AvatarURL != "https://cdn.example.com/new-avatar.png" {
+			t.Fatalf("expected refreshed avatar_url, got %q", u.AvatarURL)
 		}
 	})
 
@@ -60,6 +64,7 @@ func TestPostgresOAuthRepo_IntegrationScenarios(t *testing.T) {
 			ProviderUserID: "gh-222",
 			Email:          "LINKME@example.com",
 			EmailVerified:  true,
+			AvatarURL:      "https://cdn.example.com/linked-avatar.png",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -67,7 +72,28 @@ func TestPostgresOAuthRepo_IntegrationScenarios(t *testing.T) {
 		if u.UserID.String() != userID {
 			t.Fatalf("expected linked user_id=%s got=%s", userID, u.UserID.String())
 		}
+		if u.AvatarURL != "https://cdn.example.com/linked-avatar.png" {
+			t.Fatalf("expected updated avatar_url, got %q", u.AvatarURL)
+		}
 		assertCount(t, ctx, pool, "SELECT COUNT(*) FROM oauth_accounts WHERE provider='github' AND provider_user_id='gh-222'", 1)
+	})
+
+	t.Run("empty incoming avatar does not erase existing avatar", func(t *testing.T) {
+		resetAuthSchema(t, ctx, pool)
+		seedUserAndOAuthWithAvatar(t, ctx, pool, "keep@example.com", "keep@example.com", "google", "g-keep", "https://cdn.example.com/original.png")
+		u, _, err := svc.OAuthUpsert(ctx, OAuthUpsertInput{
+			Provider:       ProviderGoogle,
+			ProviderUserID: "g-keep",
+			Email:          "keep@example.com",
+			EmailVerified:  true,
+			AvatarURL:      "   ",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.AvatarURL != "https://cdn.example.com/original.png" {
+			t.Fatalf("expected avatar preserved, got %q", u.AvatarURL)
+		}
 	})
 
 	t.Run("brand new user creation", func(t *testing.T) {
@@ -176,6 +202,26 @@ func seedUserAndOAuth(t *testing.T, ctx context.Context, pool *pgxpool.Pool, ema
 	t.Helper()
 	id := seedUserOnly(t, ctx, pool, email, nickname)
 	_, err := pool.Exec(ctx, `
+		INSERT INTO oauth_accounts (user_id, provider, provider_user_id, provider_email, provider_email_verified)
+		VALUES ($1, $2, $3, $4, TRUE)
+	`, id, provider, providerID, email)
+	if err != nil {
+		t.Fatalf("seed oauth: %v", err)
+	}
+}
+
+func seedUserAndOAuthWithAvatar(t *testing.T, ctx context.Context, pool *pgxpool.Pool, email, nickname, provider, providerID, avatarURL string) {
+	t.Helper()
+	var id string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO users (email, email_normalized, nickname, nickname_normalized, avatar_url)
+		VALUES ($1, lower($1), $2, lower($2), $3)
+		RETURNING id
+	`, email, nickname, avatarURL).Scan(&id)
+	if err != nil {
+		t.Fatalf("seed user with avatar: %v", err)
+	}
+	_, err = pool.Exec(ctx, `
 		INSERT INTO oauth_accounts (user_id, provider, provider_user_id, provider_email, provider_email_verified)
 		VALUES ($1, $2, $3, $4, TRUE)
 	`, id, provider, providerID, email)
